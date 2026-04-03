@@ -40,7 +40,106 @@ import {
 import { format, addHours, isAfter, parseISO } from 'date-fns';
 import ReactMarkdown from 'react-markdown';
 
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean, error: Error | null }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      let errorMessage = "Something went wrong.";
+      try {
+        const parsed = JSON.parse(this.state.error?.message || "{}");
+        if (parsed.error) errorMessage = parsed.error;
+      } catch (e) {
+        errorMessage = this.state.error?.message || errorMessage;
+      }
+
+      return (
+        <div className="flex flex-col items-center justify-center h-screen bg-slate-50 p-4 text-center">
+          <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full">
+            <AlertCircle className="w-12 h-12 text-rose-500 mx-auto mb-4" />
+            <h2 className="text-xl font-bold text-slate-900 mb-2">Application Error</h2>
+            <p className="text-slate-600 mb-6">{errorMessage}</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all"
+            >
+              Reload Application
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
+  );
+}
+
+function AppContent() {
   const [user, setUser] = useState<User | null>(null);
   const [scripts, setScripts] = useState<Script[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -72,11 +171,15 @@ export default function App() {
     const qScripts = query(collection(db, 'scripts'), orderBy('updatedAt', 'desc'));
     const unsubScripts = onSnapshot(qScripts, (snapshot) => {
       setScripts(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Script)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'scripts');
     });
 
     const qClients = query(collection(db, 'clients'), orderBy('name', 'asc'));
     const unsubClients = onSnapshot(qClients, (snapshot) => {
       setClients(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Client)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'clients');
     });
 
     return () => {
@@ -91,6 +194,8 @@ export default function App() {
     const qLogs = query(collection(db, `scripts/${selectedScript.id}/logs`), orderBy('timestamp', 'desc'));
     const unsubLogs = onSnapshot(qLogs, (snapshot) => {
       setLogs(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Log)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, `scripts/${selectedScript.id}/logs`);
     });
     return () => unsubLogs();
   }, [selectedScript]);
@@ -114,14 +219,18 @@ export default function App() {
       followUpCount: 0,
     };
 
-    const docRef = await addDoc(collection(db, 'scripts'), newScript);
-    await addDoc(collection(db, `scripts/${docRef.id}/logs`), {
-      scriptId: docRef.id,
-      timestamp: new Date().toISOString(),
-      action: 'Created',
-      message: `Script "${newScript.title}" created by ${user?.displayName}.`
-    });
-    setShowAddScript(false);
+    try {
+      const docRef = await addDoc(collection(db, 'scripts'), newScript);
+      await addDoc(collection(db, `scripts/${docRef.id}/logs`), {
+        scriptId: docRef.id,
+        timestamp: new Date().toISOString(),
+        action: 'Created',
+        message: `Script "${newScript.title}" created by ${user?.displayName}.`
+      });
+      setShowAddScript(false);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'scripts');
+    }
   };
 
   const addClient = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -134,8 +243,12 @@ export default function App() {
       preferredChannel: formData.get('preferredChannel') as 'WhatsApp' | 'Email',
       slaHours: parseInt(formData.get('slaHours') as string) || 48,
     };
-    await addDoc(collection(db, 'clients'), newClient);
-    setShowAddClient(false);
+    try {
+      await addDoc(collection(db, 'clients'), newClient);
+      setShowAddClient(false);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'clients');
+    }
   };
 
   const sendApprovalRequest = async (script: Script) => {
@@ -145,19 +258,23 @@ export default function App() {
     const deadline = addHours(new Date(), client.slaHours).toISOString();
     const message = await formatApprovalMessage(script, client.name, client.preferredChannel, format(parseISO(deadline), 'PPp'));
 
-    await updateDoc(doc(db, 'scripts', script.id), {
-      status: 'Waiting for Feedback',
-      responseDeadline: deadline,
-      updatedAt: new Date().toISOString(),
-    });
+    try {
+      await updateDoc(doc(db, 'scripts', script.id), {
+        status: 'Waiting for Feedback',
+        responseDeadline: deadline,
+        updatedAt: new Date().toISOString(),
+      });
 
-    await addDoc(collection(db, `scripts/${script.id}/logs`), {
-      scriptId: script.id,
-      timestamp: new Date().toISOString(),
-      action: 'Request Sent',
-      message: `Approval request sent via ${client.preferredChannel}.`,
-      channel: client.preferredChannel
-    });
+      await addDoc(collection(db, `scripts/${script.id}/logs`), {
+        scriptId: script.id,
+        timestamp: new Date().toISOString(),
+        action: 'Request Sent',
+        message: `Approval request sent via ${client.preferredChannel}.`,
+        channel: client.preferredChannel
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `scripts/${script.id}`);
+    }
   };
 
   const simulateClientResponse = async (script: Script, responseText: string) => {
@@ -177,17 +294,21 @@ export default function App() {
       newStatus = 'Call Requested';
     }
 
-    await updateDoc(doc(db, 'scripts', script.id), {
-      status: newStatus,
-      updatedAt: new Date().toISOString(),
-    });
+    try {
+      await updateDoc(doc(db, 'scripts', script.id), {
+        status: newStatus,
+        updatedAt: new Date().toISOString(),
+      });
 
-    await addDoc(collection(db, `scripts/${script.id}/logs`), {
-      scriptId: script.id,
-      timestamp: new Date().toISOString(),
-      action: 'Response Received',
-      message: logMessage
-    });
+      await addDoc(collection(db, `scripts/${script.id}/logs`), {
+        scriptId: script.id,
+        timestamp: new Date().toISOString(),
+        action: 'Response Received',
+        message: logMessage
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `scripts/${script.id}`);
+    }
 
     if (classification.classification === 'Revision Requested') {
       // Create revision task logic could go here
@@ -223,18 +344,22 @@ export default function App() {
           }
 
           if (action) {
-            await updateDoc(doc(db, 'scripts', script.id), {
-              followUpCount: newFollowUpCount,
-              status: newStatus,
-              lastFollowUpAt: now.toISOString(),
-              updatedAt: now.toISOString(),
-            });
-            await addDoc(collection(db, `scripts/${script.id}/logs`), {
-              scriptId: script.id,
-              timestamp: now.toISOString(),
-              action,
-              message
-            });
+            try {
+              await updateDoc(doc(db, 'scripts', script.id), {
+                followUpCount: newFollowUpCount,
+                status: newStatus,
+                lastFollowUpAt: now.toISOString(),
+                updatedAt: now.toISOString(),
+              });
+              await addDoc(collection(db, `scripts/${script.id}/logs`), {
+                scriptId: script.id,
+                timestamp: now.toISOString(),
+                action,
+                message
+              });
+            } catch (error) {
+              handleFirestoreError(error, OperationType.UPDATE, `scripts/${script.id}`);
+            }
           }
         }
       }

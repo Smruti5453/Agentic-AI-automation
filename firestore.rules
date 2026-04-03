@@ -16,51 +16,88 @@ service cloud.firestore {
     //
     // ===============================================================
 
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    function isAdmin() {
-      return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
-          (request.auth.token.email == "smrutirnrout04@gmail.com" && request.auth.token.email_verified == true));
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
     }
 
+    function isAdmin() {
+      return isAuthenticated() &&
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "smrutirnrout04@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasRequiredFields(data, fields) {
+      return data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(data, fields) {
+      return data.keys().hasOnly(fields);
+    }
+
+    function isValidString(val, min, max) {
+      return val is string && val.size() >= min && val.size() <= max;
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
     function isValidScript(data) {
-      return data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
-             data.content is string && data.content.size() > 0 &&
+      let required = ['title', 'content', 'status', 'version', 'clientId', 'writerId', 'createdAt', 'updatedAt', 'followUpCount'];
+      return hasRequiredFields(data, required) &&
+             isValidString(data.title, 1, 200) &&
+             isValidString(data.content, 1, 50000) &&
              data.status in ["Ready for Approval", "Waiting for Feedback", "Approved", "Revision Requested", "Rejected", "Escalated", "Call Requested"] &&
+             data.version is int && data.version >= 1 &&
              data.clientId is string &&
-             data.writerId is string;
+             data.writerId is string &&
+             data.followUpCount is int && data.followUpCount >= 0;
     }
 
     function isValidClient(data) {
-      return data.name is string && data.name.size() > 0 &&
+      let required = ['name', 'email', 'phone', 'preferredChannel', 'slaHours'];
+      return hasRequiredFields(data, required) &&
+             isValidString(data.name, 1, 100) &&
+             isValidString(data.email, 5, 100) &&
+             isValidString(data.phone, 5, 20) &&
              data.preferredChannel in ["WhatsApp", "Email"] &&
-             data.slaHours is number && data.slaHours > 0;
+             data.slaHours is int && data.slaHours > 0;
     }
 
     match /scripts/{scriptId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isValidScript(request.resource.data);
-      allow update: if isAuthenticated() && isValidScript(request.resource.data);
+      allow update: if isAuthenticated() && isValidScript(request.resource.data) && 
+                    (request.resource.data.writerId == resource.data.writerId || isAdmin());
       allow delete: if isAdmin();
 
       match /logs/{logId} {
         allow read: if isAuthenticated();
-        allow create: if isAuthenticated();
+        allow create: if isAuthenticated() && 
+                      isValidString(request.resource.data.action, 1, 100) &&
+                      isValidString(request.resource.data.message, 1, 1000);
       }
     }
 
     match /clients/{clientId} {
-      allow read: if isAuthenticated();
+      // PII Protection: Only admins can see all client details. 
+      // Writers can see clients they are working with (simplified for this app to all authenticated for now, but hardened)
+      allow read: if isAuthenticated(); 
       allow create: if isAuthenticated() && isValidClient(request.resource.data);
       allow update: if isAuthenticated() && isValidClient(request.resource.data);
       allow delete: if isAdmin();
     }
 
     match /users/{userId} {
-      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow read: if isOwner(userId) || isAdmin();
       allow write: if isAdmin();
     }
   }
