@@ -1,0 +1,5 @@
+{
+  "name": "Scrollhouse Content Approval Agent",
+  "description": "An agentic AI system to manage script approval loops, follow-ups, and status tracking for Scrollhouse.",
+  "requestFramePermissions": []
+}

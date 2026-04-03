@@ -1,0 +1,54 @@
+{
+  "entities": {
+    "Script": {
+      "title": "Script",
+      "description": "A script being managed for approval.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Title of the script" },
+        "content": { "type": "string", "description": "The actual script text" },
+        "status": { "type": "string", "enum": ["Ready for Approval", "Waiting for Feedback", "Approved", "Revision Requested", "Rejected", "Escalated", "Call Requested"], "description": "Current approval status" },
+        "version": { "type": "integer", "description": "Version number of the script" },
+        "clientId": { "type": "string", "description": "ID of the client" },
+        "writerId": { "type": "string", "description": "ID of the scriptwriter" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "lastFollowUpAt": { "type": "string", "format": "date-time" },
+        "followUpCount": { "type": "integer" },
+        "responseDeadline": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "content", "status", "clientId", "writerId"]
+    },
+    "Client": {
+      "title": "Client",
+      "description": "Client contact details and SLA settings.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "phone": { "type": "string" },
+        "preferredChannel": { "type": "string", "enum": ["WhatsApp", "Email"] },
+        "slaHours": { "type": "integer", "description": "Response SLA in hours (default 48)" }
+      },
+      "required": ["name", "preferredChannel", "slaHours"]
+    },
+    "Log": {
+      "title": "Log",
+      "description": "History of events for a script.",
+      "type": "object",
+      "properties": {
+        "scriptId": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "action": { "type": "string" },
+        "message": { "type": "string" },
+        "channel": { "type": "string" }
+      },
+      "required": ["scriptId", "timestamp", "action"]
+    }
+  },
+  "firestore": {
+    "/scripts/{scriptId}": { "schema": "Script", "description": "Collection of scripts." },
+    "/clients/{clientId}": { "schema": "Client", "description": "Collection of clients." },
+    "/scripts/{scriptId}/logs/{logId}": { "schema": "Log", "description": "Event logs for a specific script." }
+  }
+}
